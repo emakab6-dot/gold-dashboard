@@ -1,0 +1,255 @@
+name: Fetch Gold OI Data
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch CME Gold Data
+        run: |
+          python3 << 'PYEOF'
+          import urllib.request, urllib.error
+          import json, time, os
+
+          TS = int(time.time() * 1000)
+
+          HEADERS_GET = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://www.cmegroup.com/markets/metals/precious/gold.quotes.options.html',
+            'Origin': 'https://www.cmegroup.com',
+            'Cache-Control': 'no-cache',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+          }
+
+          HEADERS_POST = {**HEADERS_GET, 'Content-Type': 'application/json'}
+
+          def get(url, timeout=15):
+            req = urllib.request.Request(url, headers=HEADERS_GET)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+              return json.loads(r.read().decode('utf-8', errors='replace'))
+
+          def post(url, body, timeout=15):
+            data = json.dumps(body).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers=HEADERS_POST, method='POST')
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+              return json.loads(r.read().decode('utf-8', errors='replace'))
+
+          def si(v):
+            try: return int(str(v).replace(',','').strip())
+            except: return 0
+
+          def sf(v):
+            try: return float(str(v).replace(',','').strip())
+            except: return 0.0
+
+          result = {
+            'timestamp': TS,
+            'updated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'price': None, 'gc_oi': None,
+            'call_oi': 0, 'put_oi': 0,
+            'strikes': [], 'errors': []
+          }
+
+          # ═══ 1. GC price via v2 ═══
+          print("=== 1. GC PRICE ===")
+          try:
+            d = get(f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/437/GCM6?isProtected&_t={TS}')
+            # Cherche dans quotes array
+            quotes = d.get('quotes', [])
+            for q in quotes:
+              p = sf(q.get('last', q.get('notionalValue', 0)))
+              if 1000 < p < 10000:  # gold price range
+                result['price'] = p
+                print(f"Price: {p}")
+                break
+            # Ou directement dans notionalValue / 100
+            if not result['price']:
+              for q in quotes:
+                nv = sf(q.get('notionalValue', 0))
+                if nv > 100000:  # 100oz * ~5000
+                  result['price'] = round(nv / 100, 1)
+                  print(f"Price from notionalValue: {result['price']}")
+                  break
+            print(f"GC v2 quotes[0] keys: {list(quotes[0].keys()) if quotes else 'empty'}")
+            if quotes:
+              print(f"GC v2 quotes[0] sample: {json.dumps(quotes[0])[:400]}")
+          except Exception as e:
+            print(f"GC v2 error: {e}")
+            result['errors'].append(f'gc:{e}')
+
+          # ═══ 2. Stooq fallback ═══
+          if not result['price']:
+            try:
+              req = urllib.request.Request(
+                'https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv',
+                headers={'User-Agent':'Mozilla/5.0'}
+              )
+              with urllib.request.urlopen(req, timeout=8) as r:
+                lines = r.read().decode().strip().split('\n')
+                if len(lines) >= 2:
+                  result['price'] = float(lines[1].split(',')[6])
+                  print(f"Stooq price: {result['price']}")
+            except Exception as e:
+              result['errors'].append(f'stooq:{e}')
+
+          SP = result['price'] or 4700
+          print(f"Spot price: {SP}")
+
+          # ═══ 3. ATM options GET ═══
+          # URL: CmeWS/mvc/atm/strike-prices/192/2026/5/ATM
+          # Produit 192 = GC options, month=5 (May) ou 6 (June)
+          print("\n=== 3. ATM OPTIONS ===")
+          atm_data = None
+          for month in [6, 5, 7]:
+            try:
+              url = f'https://www.cmegroup.com/CmeWS/mvc/atm/strike-prices/192/2026/{month}/ATM?isProtected&_t={TS}'
+              d = get(url, timeout=12)
+              print(f"ATM month={month}: type={type(d).__name__}")
+              if isinstance(d, dict):
+                print(f"  keys: {list(d.keys())}")
+                print(f"  sample: {json.dumps(d)[:500]}")
+              elif isinstance(d, list):
+                print(f"  len={len(d)}, first: {json.dumps(d[0])[:300] if d else 'empty'}")
+              atm_data = d
+              break
+            except urllib.error.HTTPError as e:
+              print(f"ATM month={month}: HTTP {e.code}")
+            except Exception as e:
+              print(f"ATM month={month}: {e}")
+
+          # ═══ 4. quotes-by-symbol POST (vraie requête CME) ═══
+          print("\n=== 4. quotes-by-symbol POST ===")
+          # Le body POST contient une liste de quote codes
+          # Format: ["OGM6 C4700", "OGM6 P4700", "OGM6 C4750", ...]
+          # On génère les strikes autour du spot
+          strikes_to_fetch = []
+          for s in range(int(SP/25)*25 - 200, int(SP/25)*25 + 225, 25):
+            strikes_to_fetch.append(f"OGM6 C{s}")
+            strikes_to_fetch.append(f"OGM6 P{s}")
+
+          print(f"Fetching {len(strikes_to_fetch)} quote codes")
+          try:
+            url = f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/quotes-by-symbol?isProtected&_t={TS}'
+            # Body format from network inspector
+            body = strikes_to_fetch
+            d = post(url, body, timeout=20)
+            print(f"qbs response type: {type(d).__name__}, len: {len(d) if isinstance(d, list) else 'N/A'}")
+            if isinstance(d, list) and d:
+              print(f"First item: {json.dumps(d[0])[:300]}")
+              print(f"First item keys: {list(d[0].keys()) if isinstance(d[0], dict) else 'N/A'}")
+              
+              # Parse responses - quoteCode = "OGM6 C4720"
+              call_oi = put_oi = 0
+              strikes_map = {}
+              for item in d:
+                qc = item.get('quoteCode', item.get('escapedQuoteCode', ''))
+                # Parse "OGM6 C4720" → type=C, strike=4720
+                parts = qc.split(' ')
+                if len(parts) == 2:
+                  pc = parts[1][0]  # C or P
+                  try:
+                    k = float(parts[1][1:])
+                  except:
+                    continue
+                  
+                  # OI fields to check
+                  oi = si(item.get('openInterest', item.get('oi', item.get('totalOpenInterest', 0))))
+                  vol = si(item.get('volume', 0))
+                  last = sf(item.get('last', 0))
+                  
+                  if k not in strikes_map:
+                    strikes_map[k] = {'k': k, 'coi': 0, 'cvol': 0, 'poi': 0, 'pvol': 0, 'cbid': 0, 'cask': 0, 'pbid': 0, 'pask': 0}
+                  
+                  if pc == 'C':
+                    strikes_map[k]['coi'] = oi
+                    strikes_map[k]['cvol'] = vol
+                    strikes_map[k]['clast'] = last
+                    call_oi += oi
+                  elif pc == 'P':
+                    strikes_map[k]['poi'] = oi
+                    strikes_map[k]['pvol'] = vol
+                    strikes_map[k]['plast'] = last
+                    put_oi += oi
+              
+              print(f"Parsed: call_oi={call_oi} put_oi={put_oi} strikes={len(strikes_map)}")
+              
+              if call_oi + put_oi > 0:
+                result['call_oi'] = call_oi
+                result['put_oi'] = put_oi
+                result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
+              else:
+                # OI might be 0 but we have volume — use volume as proxy and check all fields
+                print("Zero OI — checking all fields in first item:")
+                if d:
+                  print(json.dumps(d[0], indent=2)[:600])
+                  
+          except urllib.error.HTTPError as e:
+            print(f"qbs POST error: HTTP {e.code}")
+            # Try with different body format
+            try:
+              # Maybe body needs to be wrapped
+              body2 = {"quoteCodes": strikes_to_fetch}
+              d2 = post(url, body2, timeout=20)
+              print(f"qbs POST (wrapped): {json.dumps(d2)[:300]}")
+            except Exception as e2:
+              print(f"qbs POST wrapped error: {e2}")
+            result['errors'].append(f'qbs:{e.code}')
+          except Exception as e:
+            print(f"qbs POST error: {e}")
+            result['errors'].append(f'qbs:{e}')
+
+          # ═══ 5. contracts-by-number (aussi un POST) ═══
+          print("\n=== 5. contracts-by-number ===")
+          try:
+            url = f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/contracts-by-number?isProtected&_t={TS}'
+            # Try GET first
+            d = get(url, timeout=10)
+            print(f"cbn GET: {json.dumps(d)[:400]}")
+          except urllib.error.HTTPError as e:
+            if e.code == 400:
+              # It's a POST
+              try:
+                body = {"productId": 192, "type": "OPT", "month": 6, "year": 2026}
+                d = post(url, body, timeout=10)
+                print(f"cbn POST: {json.dumps(d)[:400]}")
+              except Exception as e2:
+                print(f"cbn POST error: {e2}")
+            else:
+              print(f"cbn GET: HTTP {e.code}")
+          except Exception as e:
+            print(f"cbn error: {e}")
+
+          # ═══ SAVE ═══
+          os.makedirs('data', exist_ok=True)
+          with open('data/gold.json', 'w') as f:
+            json.dump(result, f, indent=2)
+
+          print(f"\n=== FINAL ===")
+          print(f"Price: {result['price']}")
+          print(f"GC OI: {result['gc_oi']}")
+          print(f"Call OI: {result['call_oi']}")
+          print(f"Put OI: {result['put_oi']}")
+          print(f"Strikes: {len(result['strikes'])}")
+          print(f"Errors: {result['errors']}")
+          PYEOF
+
+      - name: Commit data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/gold.json
+          git diff --staged --quiet || git commit -m "data: Gold OI $(date -u '+%H:%M UTC')"
+          git push
