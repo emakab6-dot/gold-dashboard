@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GOLD OI — CME LIVE</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#090b10;--panel:#0d1117;--card:#111820;--hdr:#0a0e14;
+  --b1:#1e2a38;--b2:#253548;
+  --green:#00e676;--red:#ff3d57;--gold:#f9a825;
+  --tp:#e8edf5;--ts:#7a8fa8;--td:#3d5068;
+  --call:#00e5ff;--put:#ff6b6b;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--tp);font-family:'JetBrains Mono',monospace;font-size:12px;min-height:100vh;}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--hdr);border-bottom:2px solid #f9a82545;position:sticky;top:0;z-index:100;}
+.logo{font-family:'Rajdhani',sans-serif;font-size:22px;font-weight:700;color:var(--gold);letter-spacing:3px;}
+.logo span{color:var(--ts);font-weight:300;}
+.tag{font-size:9px;padding:2px 8px;border:1px solid #f9a82545;border-radius:2px;color:var(--gold);letter-spacing:2px;}
+.gp{font-size:22px;font-weight:700;font-family:'Rajdhani',sans-serif;}
+.gch{font-size:12px;margin-left:6px;}
+.tbr{display:flex;align-items:center;gap:10px;}
+.dot{width:7px;height:7px;border-radius:50%;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.stxt{color:var(--ts);font-size:10px;}
+.btn{background:transparent;padding:5px 12px;font-family:'JetBrains Mono',monospace;font-size:10px;cursor:pointer;border-radius:2px;}
+.btng{border:1px solid var(--gold);color:var(--gold);}
+.btnr{border:1px solid var(--red);color:var(--red);}
+.main{padding:14px 20px;}
+.tfc{display:flex;align-items:center;gap:6px;padding:0 0 12px;}
+.tfl{color:var(--td);font-size:9px;letter-spacing:1.5px;margin-right:4px;}
+.tfb{background:var(--card);border:1px solid var(--b2);color:var(--ts);padding:5px 10px;border-radius:2px;font-family:'JetBrains Mono',monospace;font-size:10px;cursor:pointer;}
+.tfb.active{color:var(--gold);border-color:var(--gold);}
+.mst{font-size:9px;margin-left:auto;letter-spacing:1px;}
+.mst.ok{color:var(--green);}.mst.bad{color:var(--red);}.mst.warn{color:var(--gold);}
+.banner{padding:7px 14px;margin-bottom:12px;font-size:10px;border-radius:3px;border:1px solid #f9a82530;background:#f9a82510;color:var(--gold);}
+.banner.ok{background:#00e67610;border-color:#00e67630;color:#00e676;}
+.banner.err{background:#ff3d5710;border-color:#ff3d5730;color:#ff3d57;}
+.srow{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px;}
+.sc{background:var(--card);border:1px solid var(--b1);border-top:2px solid transparent;padding:10px 14px;border-radius:2px;}
+.scl{color:var(--td);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;}
+.scv{font-size:15px;font-weight:700;font-family:'Rajdhani',sans-serif;}
+.scs{font-size:10px;color:var(--ts);margin-top:2px;}
+.pos{color:var(--green);}.neg{color:var(--red);}.neu{color:var(--ts);}
+.oip{border:1px solid #f9a82545;margin-bottom:14px;border-radius:2px;overflow:hidden;}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--hdr);border-bottom:1px solid var(--b1);}
+.pt{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:600;letter-spacing:1px;}
+.ps{display:flex;gap:16px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--b1);background:var(--card);}
+.sl{font-size:9px;color:var(--td);text-transform:uppercase;letter-spacing:1px;}
+.sv{font-size:12px;font-weight:700;font-family:'Rajdhani',sans-serif;}
+.lr{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.li{display:inline-flex;align-items:center;gap:5px;color:var(--ts);font-size:9px;}
+.ll{width:16px;height:2px;border-radius:2px;display:inline-block;}
+.ca{padding:8px;}
+.cl{font-size:9px;color:var(--td);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;}
+canvas{display:block;width:100%;}
+.dv{height:1px;background:var(--b1);margin:6px 0;}
+.chs{margin-bottom:14px;}
+.chh{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:var(--hdr);border:1px solid #f9a82540;border-radius:2px 2px 0 0;padding:8px 14px;}
+.cht{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;color:var(--gold);letter-spacing:2px;}
+.chm{display:flex;gap:16px;font-size:10px;flex-wrap:wrap;align-items:center;}
+.chm span{color:var(--ts);}.chm strong{color:var(--tp);}
+.chw{overflow-x:auto;border:1px solid var(--b1);border-top:none;border-radius:0 0 2px 2px;}
+table.ch{width:100%;border-collapse:collapse;font-size:11px;}
+table.ch thead tr{background:var(--card);}
+table.ch thead th{padding:6px 10px;color:var(--td);font-size:9px;letter-spacing:1px;text-transform:uppercase;font-weight:400;border-bottom:1px solid var(--b1);}
+th.hc{color:var(--call);}th.hp{color:var(--put);}th.hs{color:var(--gold);background:#f9a82510;}
+table.ch tbody tr{border-bottom:1px solid var(--b1);}
+table.ch tbody tr:hover{background:#ffffff05;}
+table.ch tbody tr.atm{background:#f9a82508;}
+table.ch tbody tr.atm td.tss{color:var(--gold);font-weight:700;background:#f9a82514;}
+table.ch td{padding:5px 10px;text-align:right;white-space:nowrap;}
+td.tss{text-align:center;font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:600;background:#f9a82506;border-left:1px solid #f9a82520;border-right:1px solid #f9a82520;}
+td.tc{color:var(--call);}td.tp{color:var(--put);}
+.ob{display:inline-block;height:3px;border-radius:2px;vertical-align:middle;margin-left:3px;opacity:.5;}
+.footer{border-top:1px solid var(--b1);padding:10px 20px;display:flex;justify-content:space-between;color:var(--td);font-size:9px;}
+::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:14px;">
+    <div class="logo">GOLD<span>OI</span></div>
+    <div class="tag">CME · COMEX</div>
+    <span class="gp" id="gp">—</span>
+    <span class="gch" id="gch"></span>
+  </div>
+  <div class="tbr">
+    <span class="dot" id="dot" style="background:var(--gold);box-shadow:0 0 8px var(--gold)"></span>
+    <span class="stxt" id="upd">INIT...</span>
+    <button class="btn btnr" onclick="clearHist()">✕ RESET</button>
+    <button class="btn btng" onclick="loadData()">↺ REFRESH</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="tfc">
+    <span class="tfl">TF</span>
+    <button class="tfb active" data-tf="1"  onclick="setTF(1)">1 MIN</button>
+    <button class="tfb"        data-tf="5"  onclick="setTF(5)">5 MIN</button>
+    <button class="tfb"        data-tf="15" onclick="setTF(15)">15 MIN</button>
+    <button class="tfb"        data-tf="30" onclick="setTF(30)">30 MIN</button>
+    <span class="mst" id="mst">CHECKING...</span>
+  </div>
+  <div class="banner" id="bn">⏳ Chargement données CME...</div>
+
+  <div class="srow">
+    <div class="sc" style="border-top-color:#f9a825"><div class="scl">GC PRICE</div><div class="scv" id="s0" style="color:#f9a825">—</div><div class="scs">100oz · COMEX</div></div>
+    <div class="sc" style="border-top-color:#ffd54f"><div class="scl">GC OI</div><div class="scv" id="s1" style="color:#ffd54f">—</div><div class="scs" id="sd1">Δ —</div></div>
+    <div class="sc" style="border-top-color:#ffb74d"><div class="scl">DATA AGE</div><div class="scv" id="s2" style="color:#ffb74d;font-size:12px">—</div><div class="scs">Last update</div></div>
+    <div class="sc" style="border-top-color:#00e5ff"><div class="scl">CALL OI</div><div class="scv" id="s3" style="color:#00e5ff">—</div><div class="scs">Options GC</div></div>
+    <div class="sc" style="border-top-color:#ff6b6b"><div class="scl">PUT OI</div><div class="scv" id="s4" style="color:#ff6b6b">—</div><div class="scs">Options GC</div></div>
+    <div class="sc" style="border-top-color:#ce93d8"><div class="scl">P/C RATIO</div><div class="scv" id="s5">—</div><div class="scs" id="smp">MAX PAIN: —</div></div>
+  </div>
+
+  <!-- OI ABSOLU PANEL -->
+  <div class="oip">
+    <div class="ph">
+      <span class="pt" style="color:var(--gold)">◈ OI ABSOLU OPTIONS — CALLS &amp; PUTS · CME GOLD LIVE</span>
+      <span style="color:var(--td);font-size:9px" id="oi-inf">CME · TF 1M</span>
+    </div>
+    <div class="ps">
+      <div><div class="sl">TOTAL OI</div><div class="sv" style="color:var(--gold)" id="ot">—</div></div>
+      <div><div class="sl">CALLS</div><div class="sv" style="color:#00e676" id="oc">—</div></div>
+      <div><div class="sl">PUTS</div><div class="sv" style="color:#ff3d57" id="op">—</div></div>
+      <div><div class="sl">DELTA TOTAL</div><div class="sv" id="od">—</div></div>
+      <div><div class="sl">P/C RATIO</div><div class="sv" id="opc">—</div></div>
+      <div><div class="sl">STRIKES</div><div class="sv" style="color:var(--ts)" id="oin">—</div></div>
+      <div><div class="sl">SAMPLES 1M</div><div class="sv" style="color:var(--ts)" id="osmp">0</div></div>
+    </div>
+    <div class="ps lr" style="padding:5px 12px;">
+      <span class="li"><span class="ll" style="background:#00e676"></span>CALL OI</span>
+      <span class="li"><span class="ll" style="background:#ff3d57"></span>PUT OI</span>
+      <span class="li" style="margin-left:auto;color:var(--td);font-size:10px">CME GROUP · GITHUB ACTIONS · UPDATE 5MIN</span>
+    </div>
+    <div class="ca">
+      <div class="cl">OI ABSOLU — CALL vs PUT · COURBE TEMPS RÉEL</div>
+      <canvas id="cvs" style="height:260px"></canvas>
+    </div>
+  </div>
+
+  <!-- OPTION CHAIN -->
+  <div class="chs">
+    <div class="chh">
+      <span class="cht">◈ GC OPTIONS — CALL / PUT · OI CHAIN · NEAR THE MONEY</span>
+      <div class="chm">
+        <span>EXPIRY <strong id="ce">JUN 2026</strong></span>
+        <span>P/C <strong id="cpc" style="color:#ce93d8">—</strong></span>
+        <span>MAX PAIN <strong id="cmp" style="color:var(--green)">—</strong></span>
+        <span style="color:var(--td);font-size:9px" id="cupd">—</span>
+      </div>
+    </div>
+    <div class="chw">
+      <table class="ch">
+        <thead><tr>
+          <th class="hc">OI CALLS</th><th class="hc">VOL</th>
+          <th class="hs">STRIKE</th>
+          <th class="hp">VOL</th><th class="hp">OI PUTS</th>
+        </tr></thead>
+        <tbody id="cb"><tr><td colspan="5" style="text-align:center;color:var(--td);padding:24px">CHARGEMENT...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <span>SOURCE: CME GROUP VIA GITHUB ACTIONS — FETCH TOUTES LES 5 MIN — DONNÉES RÉELLES UNIQUEMENT</span>
+  <span id="ft"></span>
+</div>
+
+<script>
+const MAX=2000,REFR=5*60*1000,SK='goi_v9';
+let aTF=1,gPrice=null;
+let oRaw=[],oH=[];
+
+/* Persistence */
+function save(){try{localStorage.setItem(SK,JSON.stringify({o:oRaw.slice(-600)}));}catch(e){}}
+function load(){try{const r=localStorage.getItem(SK);if(r){const d=JSON.parse(r);if(Array.isArray(d.o))oRaw=d.o;}}catch(e){}}
+function clearHist(){if(!confirm('Reset historique ?'))return;localStorage.removeItem(SK);oRaw=[];rebuild();rAF(drawAll);}
+load();
+
+/* Utils */
+const fN=(v,d=0)=>isFinite(v)?v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}):'—';
+function fK(v){if(!isFinite(v))return'—';const a=Math.abs(v),s=v<0?'-':'';return a>=1e6?s+(a/1e6).toFixed(2)+'M':a>=1e3?s+(a/1e3).toFixed(1)+'K':s+a.toFixed(0);}
+const sgn=v=>isFinite(v)?(v>=0?'+':'')+fK(v):'—';
+const now8=()=>new Date().toISOString().replace('T',' ').slice(0,19)+' UTC';
+const tL=ts=>{const d=new Date(ts);return`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;};
+function bkt(raw,tf){if(!raw?.length)return[];const ms=tf*60000,m=new Map();raw.forEach(s=>{const b=Math.floor(s.t/ms)*ms;m.set(b,{...s,t:b});});return Array.from(m.values()).sort((a,b)=>a.t-b.t);}
+function rebuild(){oH=bkt(oRaw,aTF);}
+function setTF(tf){aTF=tf;document.querySelectorAll('.tfb').forEach(b=>b.classList.toggle('active',+b.dataset.tf===tf));rebuild();rAF(drawAll);}
+const rAF=fn=>requestAnimationFrame(()=>setTimeout(fn,50));
+
+/* Load from GitHub Actions generated JSON */
+async function loadData(){
+  const bn=document.getElementById('bn');
+  bn.className='banner';bn.textContent='⏳ Chargement data/gold.json...';
+  
+  try{
+    /* Cache-bust to always get fresh data */
+    const r=await fetch(`data/gold.json?_=${Date.now()}`,{signal:AbortSignal.timeout(10000)});
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const d=await r.json();
+    
+    const dataAge=Math.round((Date.now()-d.timestamp)/1000);
+    const ageStr=dataAge<60?`${dataAge}s`:`${Math.round(dataAge/60)}min`;
+    
+    /* Update price */
+    if(d.price&&isFinite(d.price)){
+      gPrice=d.price;
+      document.getElementById('gp').textContent='$'+fN(d.price,1);
+      document.getElementById('gch').textContent='';
+    }
+    
+    /* Update OI */
+    if(d.gc_oi){
+      document.getElementById('s1').textContent=fK(d.gc_oi);
+    }
+    document.getElementById('s0').textContent=gPrice?'$'+fN(gPrice,1):'—';
+    document.getElementById('s2').textContent=ageStr+' ago';
+    document.getElementById('s2').style.color=dataAge<600?'var(--green)':dataAge<1800?'var(--gold)':'var(--red)';
+    
+    /* Update options */
+    const callOI=d.call_oi||0,putOI=d.put_oi||0;
+    document.getElementById('s3').textContent=fK(callOI);
+    document.getElementById('s4').textContent=fK(putOI);
+    
+    if(callOI>0||putOI>0){
+      const pcrN=callOI>0?putOI/callOI:null;
+      const pcr=pcrN!==null?pcrN.toFixed(3):'—';
+      document.getElementById('s5').textContent=pcr;
+      document.getElementById('s5').className='scv '+(pcrN===null?'neu':pcrN>1?'neg':'pos');
+      document.getElementById('cpc').textContent=pcr;
+      
+      /* Push to history */
+      const t=d.timestamp;
+      const existing=oRaw.find(x=>Math.abs(x.t-t)<30000);
+      if(!existing){
+        oRaw.push({t,totalOI:callOI+putOI,callOI,putOI});
+        if(oRaw.length>MAX)oRaw.splice(0,oRaw.length-MAX);
+        save();
+      }
+      
+      /* Update OI panel */
+      const last=oH[oH.length-1],prev=oH[oH.length-2];
+      const dTot=last&&prev?last.totalOI-prev.totalOI:null;
+      document.getElementById('ot').textContent=fK(callOI+putOI);
+      document.getElementById('oc').textContent=fK(callOI);
+      document.getElementById('op').textContent=fK(putOI);
+      document.getElementById('od').textContent=dTot!==null?sgn(dTot):'—';
+      document.getElementById('od').className='sv '+(dTot===null?'neu':dTot>=0?'pos':'neg');
+      document.getElementById('opc').textContent=pcr;
+      document.getElementById('opc').className='sv '+(pcrN===null?'neu':pcrN>1?'neg':'pos');
+      document.getElementById('oin').textContent=d.strikes?.length||'—';
+      
+      /* Build chain */
+      buildChain(d.strikes||[],callOI,putOI);
+    }
+    
+    rebuild();rAF(drawAll);
+    
+    const ts=now8();
+    document.getElementById('mst').textContent=`CME · TF ${aTF}M · ${oH.length} PTS · ${ageStr}`;
+    document.getElementById('mst').className='mst '+(dataAge<600?'ok':dataAge<1800?'warn':'bad');
+    const dot=document.getElementById('dot');
+    dot.style.background=dataAge<600?'var(--green)':dataAge<1800?'var(--gold)':'var(--red)';
+    dot.style.boxShadow=`0 0 8px ${dataAge<600?'var(--green)':dataAge<1800?'var(--gold)':'var(--red)'}`;
+    document.getElementById('upd').textContent=`LIVE · ${ts}`;
+    document.getElementById('ft').textContent=`LAST UPDATE: ${ts}`;
+    document.getElementById('oi-inf').textContent=`CME · TF ${aTF}M · ${oH.length} SAMPLES`;
+    document.getElementById('osmp').textContent=oH.length;
+    
+    bn.className='banner ok';
+    bn.textContent=`✅ CME DATA · $${fN(gPrice,1)} · GC OI: ${fK(d.gc_oi)} · Call: ${fK(callOI)} · Put: ${fK(putOI)} · P/C: ${callOI>0?(putOI/callOI).toFixed(3):'—'} · ${ageStr} ago · Refresh 5min`;
+    
+    if(d.errors?.length){
+      console.warn('CME errors:', d.errors);
+    }
+    
+  }catch(e){
+    console.error(e);
+    document.getElementById('bn').className='banner err';
+    document.getElementById('bn').textContent=`⚠️ Impossible de charger data/gold.json — ${e.message} — GitHub Actions actif ?`;
+    document.getElementById('mst').textContent='OFFLINE';
+    document.getElementById('mst').className='mst bad';
+  }
+}
+
+/* Build chain table */
+function buildChain(strikes,callOI,putOI){
+  const sp=gPrice||4700;
+  const near=strikes.filter(r=>r.k>=sp*.93&&r.k<=sp*1.07);
+  
+  /* Max pain */
+  let mp=sp,minP=Infinity;
+  near.forEach(r=>{
+    let pain=0;
+    near.forEach(r2=>{
+      pain+=(r2.coi||0)*Math.max(0,r2.k-r.k)*100+(r2.poi||0)*Math.max(0,r.k-r2.k)*100;
+    });
+    if(pain<minP){minP=pain;mp=r.k;}
+  });
+  document.getElementById('cmp').textContent=fN(mp,0);
+  document.getElementById('smp').textContent='MAX PAIN: '+fN(mp,0);
+  document.getElementById('cupd').textContent=now8().slice(11,19);
+  
+  if(!near.length){
+    document.getElementById('cb').innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--td);padding:20px">PAS DE DATA CME</td></tr>';
+    return;
+  }
+  const mxC=Math.max(...near.map(r=>r.coi||0),1);
+  const mxP=Math.max(...near.map(r=>r.poi||0),1);
+  const atm=near.reduce((b,r)=>Math.abs(r.k-sp)<Math.abs(b.k-sp)?r:b,near[0]);
+  document.getElementById('cb').innerHTML=near.map(r=>{
+    const cOI=r.coi||0,pOI=r.poi||0;
+    return`<tr class="${r.k===atm.k?'atm':''}">
+      <td class="tc">${fK(cOI)}<span class="ob" style="width:${Math.round(cOI/mxC*80)}px;background:var(--call)"></span></td>
+      <td class="tc">${fK(r.cvol)}</td>
+      <td class="tss">${fN(r.k,0)}${r.k===mp?' 🎯':''}</td>
+      <td class="tp">${fK(r.pvol)}</td>
+      <td class="tp">${fK(pOI)}<span class="ob" style="width:${Math.round(pOI/mxP*80)}px;background:var(--put)"></span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* Canvas */
+function initC(c){const dpr=devicePixelRatio||1,W=c.clientWidth,H=c.clientHeight;c.width=W*dpr;c.height=H*dpr;const ctx=c.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);return{ctx,W,H};}
+function noD(ctx,W,H,m){ctx.fillStyle='#3d5068';ctx.font='10px JetBrains Mono';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(m,W/2,H/2);}
+
+function drawOptCurve(canvas,history){
+  if(!canvas)return;const{ctx,W,H}=initC(canvas);
+  const L=58,R=74,T=18,B=30,pW=Math.max(1,W-L-R),pH=Math.max(1,H-T-B);
+  ctx.strokeStyle='#1e2a3825';ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){const y=T+pH*i/4;ctx.beginPath();ctx.moveTo(L,y);ctx.lineTo(W-R,y);ctx.stroke();}
+  if(!history||history.length<2){noD(ctx,W,H,`ATTENTE DATA CME — ${oRaw.length} PT(S) HISTORIQUE`);return;}
+  const cV=history.map(h=>h.callOI),pV=history.map(h=>h.putOI),ts=history.map(h=>h.t);
+  const minT=Math.min(...ts),maxT=Math.max(...ts);
+  function rng(v){let mn=Math.min(...v),mx=Math.max(...v);if(mn===mx){const p=Math.max(Math.abs(mx)*.001,500);mn-=p;mx+=p;}else{const p=(mx-mn)*.15;mn-=p;mx+=p;}return[Math.max(0,mn),mx];}
+  const[mnC,mxC]=rng(cV),[mnP,mxP]=rng(pV);
+  const xF=t=>L+((t-minT)/Math.max(maxT-minT,1))*pW;
+  const yC=v=>T+(1-((v-mnC)/Math.max(mxC-mnC,1)))*pH;
+  const yP=v=>T+(1-((v-mnP)/Math.max(mxP-mnP,1)))*pH;
+  ctx.font='9px JetBrains Mono';ctx.textBaseline='middle';
+  ctx.textAlign='right';ctx.fillStyle='#00e676';for(let i=0;i<=4;i++) ctx.fillText(fK(mxC-(mxC-mnC)*i/4),L-5,T+pH*i/4);
+  ctx.textAlign='left';ctx.fillStyle='#ff3d57';for(let i=0;i<=4;i++) ctx.fillText(fK(mxP-(mxP-mnP)*i/4),W-R+6,T+pH*i/4);
+  ctx.fillStyle='#3d5068';ctx.textBaseline='top';ctx.textAlign='center';
+  [minT,minT+(maxT-minT)/2,maxT].forEach(t=>ctx.fillText(tL(t),xF(t),H-B+8));
+  ctx.save();ctx.beginPath();ctx.rect(L,T,pW,pH);ctx.clip();
+  function dLine(vals,yFn,col,fill,lw){
+    const g=ctx.createLinearGradient(0,T,0,T+pH);g.addColorStop(0,fill);g.addColorStop(1,'rgba(0,0,0,.02)');
+    ctx.beginPath();vals.forEach((v,i)=>{const x=xF(ts[i]),y=yFn(v);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+    ctx.lineTo(xF(ts[ts.length-1]),T+pH);ctx.lineTo(xF(ts[0]),T+pH);ctx.closePath();ctx.fillStyle=g;ctx.fill();
+    ctx.beginPath();vals.forEach((v,i)=>{const x=xF(ts[i]),y=yFn(v);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+    ctx.strokeStyle=col;ctx.lineWidth=lw;ctx.shadowColor=col+'90';ctx.shadowBlur=4;ctx.stroke();ctx.shadowBlur=0;
+    const lx=xF(ts[ts.length-1]),ly=yFn(vals[vals.length-1]);
+    ctx.fillStyle=col;ctx.beginPath();ctx.arc(lx,ly,lw+2,0,Math.PI*2);ctx.fill();
+    ctx.font='bold 9px JetBrains Mono';ctx.fillStyle=col;ctx.textAlign='right';ctx.textBaseline='bottom';
+    ctx.fillText(fK(vals[vals.length-1]),Math.min(W-R-2,lx-3),ly-2);
+  }
+  dLine(cV,yC,'#00e676','rgba(0,230,118,.22)',1.8);dLine(pV,yP,'#ff3d57','rgba(255,61,87,.20)',1.8);
+  ctx.restore();
+  const dC=cV[cV.length-1]-(cV[cV.length-2]||0),dP=pV[pV.length-1]-(pV[pV.length-2]||0);
+  ctx.font='bold 9px JetBrains Mono';ctx.textAlign='right';ctx.textBaseline='top';
+  ctx.fillStyle=dC>dP?'#00e676':dP>dC?'#ff3d57':'#7a8fa8';
+  ctx.fillText(`LIVE ${aTF}M · `+(dC>dP?'▲ CALL FLOW':dP>dC?'▼ PUT FLOW':'◆ FLAT'),W-6,4);
+}
+
+function drawAll(){drawOptCurve(document.getElementById('cvs'),oH);}
+
+/* Init */
+rebuild();rAF(drawAll);
+loadData();
+setInterval(loadData,REFR);
+window.addEventListener('resize',()=>rAF(drawAll));
+</script>
+</body>
+</html>
