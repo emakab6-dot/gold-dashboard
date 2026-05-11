@@ -15,42 +15,22 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch CME Gold Data
-        env:
-          CME_TOKEN: ${{ secrets.CME_TOKEN }}
-          CME_FGP: ${{ secrets.CME_FGP }}
         run: |
           python3 << 'PYEOF'
           import urllib.request, urllib.error
-          import json, time, os
+          import json, time, os, csv, io, gzip
+          from datetime import datetime, timedelta
 
           TS = int(time.time() * 1000)
-          CME_TOKEN = os.environ.get('CME_TOKEN', '')
-          CME_FGP   = os.environ.get('CME_FGP', '')
 
-          # Cookie complet reconstitué
-          COOKIE = f'__Secure-Fgp={CME_FGP}; cmeToken={CME_TOKEN}'
-
-          HEADERS = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.cmegroup.com/markets/metals/precious/gold.quotes.options.html',
-            'Origin': 'https://www.cmegroup.com',
-            'Cookie': COOKIE,
-          }
-
-          HEADERS_POST = {**HEADERS, 'Content-Type': 'application/json'}
-
-          def get(url, timeout=15):
-            req = urllib.request.Request(url, headers=HEADERS)
+          def get(url, headers=None, timeout=15, binary=False):
+            h = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            if headers: h.update(headers)
+            req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=timeout) as r:
-              return json.loads(r.read().decode('utf-8', errors='replace'))
-
-          def post(url, body, timeout=15):
-            data = json.dumps(body).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers=HEADERS_POST, method='POST')
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-              return json.loads(r.read().decode('utf-8', errors='replace'))
+              data = r.read()
+              if binary: return data
+              return data.decode('utf-8', errors='replace')
 
           def si(v):
             try: return int(str(v).replace(',','').strip())
@@ -64,154 +44,214 @@ jobs:
             'updated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'price': None, 'gc_oi': None,
             'call_oi': 0, 'put_oi': 0,
-            'strikes': [], 'errors': []
+            'strikes': [], 'errors': [],
+            'data_source': None
           }
 
-          has_token = bool(CME_TOKEN and len(CME_TOKEN) > 10)
-          print(f"Token présent: {has_token}")
-
           # ═══ 1. PRIX GC ═══
-          print("=== 1. PRIX ===")
+          print("=== 1. PRIX GC ===")
           try:
-            d = get(f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/437/GCM6?isProtected&_t={TS}')
+            txt = get(
+              f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/437/GCM6?isProtected&_t={TS}',
+              {'Referer': 'https://www.cmegroup.com/'}
+            )
+            d = json.loads(txt)
             for q in d.get('quotes', []):
               lp = sf(q.get('last', 0))
               nv = sf(q.get('notionalValue', 0))
-              oi = si(q.get('openInterest', 0))
               if 1000 < lp < 10000:
                 result['price'] = lp
-                if oi > 0: result['gc_oi'] = oi
-                print(f"Price: {lp}, OI: {oi}")
+                print(f"CME price: {lp}")
                 break
               elif nv > 100000:
                 result['price'] = round(nv/100, 1)
-                print(f"Price(nv): {result['price']}")
+                print(f"CME price(nv): {result['price']}")
                 break
           except Exception as e:
-            print(f"CME price: {e}")
-            result['errors'].append(f'price:{e}')
+            print(f"CME: {e}")
 
           if not result['price']:
             try:
-              req = urllib.request.Request(
-                'https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv',
-                headers={'User-Agent':'Mozilla/5.0'}
-              )
-              with urllib.request.urlopen(req, timeout=8) as r:
-                lines = r.read().decode().strip().split('\n')
-                if len(lines) >= 2:
-                  result['price'] = float(lines[1].split(',')[6])
-                  print(f"Stooq: {result['price']}")
+              txt = get('https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv')
+              lines = txt.strip().split('\n')
+              if len(lines) >= 2:
+                result['price'] = float(lines[1].split(',')[6])
+                print(f"Stooq: {result['price']}")
             except Exception as e:
-              result['errors'].append(f'stooq:{e}')
+              result['errors'].append(f'price:{e}')
 
           SP = result['price'] or 4700
           print(f"Spot: {SP}")
 
-          # ═══ 2. OPTIONS via POST quotes-by-symbol (avec auth) ═══
-          print("\n=== 2. OPTIONS POST ===")
-          strikes_to_fetch = []
-          base = int(SP / 25) * 25
-          for s in range(base - 300, base + 325, 25):
-            strikes_to_fetch.append(f"OGM6 C{s}")
-            strikes_to_fetch.append(f"OGM6 P{s}")
+          # ═══ 2. CME FTP PUBLIC — settlements ═══
+          # CME publie les settlements sur ftp.cmegroup.com — accès public total
+          print("\n=== 2. CME FTP SETTLEMENTS ===")
+          
+          today = datetime.utcnow()
+          # Cherche les 5 derniers jours ouvrables
+          dates = []
+          d = today
+          for _ in range(7):
+            if d.weekday() < 5:
+              dates.append(d)
+            d -= timedelta(days=1)
+            if len(dates) == 5: break
 
-          print(f"Fetching {len(strikes_to_fetch)} quotes")
+          print(f"Trying dates: {[d.strftime('%Y%m%d') for d in dates]}")
 
-          try:
-            url = f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/quotes-by-symbol?isProtected&_t={TS}'
-            d = post(url, strikes_to_fetch)
-            print(f"POST success: {len(d) if isinstance(d, list) else type(d).__name__} items")
-
-            if isinstance(d, list) and d:
-              print(f"Item keys: {list(d[0].keys())}")
-              print(f"First item: {json.dumps(d[0])[:300]}")
-
-              call_oi = put_oi = 0
-              strikes_map = {}
-
-              for item in d:
-                qc = item.get('quoteCode', item.get('escapedQuoteCode', ''))
-                parts = qc.split(' ')
-                if len(parts) != 2: continue
-                pc   = parts[1][0]   # C or P
-                try: k = float(parts[1][1:])
-                except: continue
-
-                oi   = si(item.get('openInterest', item.get('oi', 0)))
-                vol  = si(item.get('volume', 0))
-                last = sf(item.get('last', 0))
-                bid  = sf(item.get('bid', 0))
-                ask  = sf(item.get('ask', 0))
-
-                if k not in strikes_map:
-                  strikes_map[k] = {'k':k,'coi':0,'cvol':0,'poi':0,'pvol':0,'clast':0,'plast':0}
-
-                if pc == 'C':
-                  strikes_map[k]['coi']   = oi
-                  strikes_map[k]['cvol']  = vol
-                  strikes_map[k]['clast'] = last
-                  call_oi += oi
-                elif pc == 'P':
-                  strikes_map[k]['poi']   = oi
-                  strikes_map[k]['pvol']  = vol
-                  strikes_map[k]['plast'] = last
-                  put_oi += oi
-
-              print(f"call_oi={call_oi} put_oi={put_oi} strikes={len(strikes_map)}")
-
-              if call_oi + put_oi > 0:
-                result['call_oi'] = call_oi
-                result['put_oi']  = put_oi
-                result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
-              else:
-                # OI=0 mais volume présent → volume comme proxy
-                total_cvol = sum(si(item.get('volume',0)) for item in d if 'C' in item.get('quoteCode',''))
-                total_pvol = sum(si(item.get('volume',0)) for item in d if 'P' in item.get('quoteCode',''))
-                print(f"Volume as proxy: call={total_cvol} put={total_pvol}")
-                if total_cvol + total_pvol > 0:
-                  # Rebuild with volume
-                  for item in d:
-                    qc = item.get('quoteCode','')
-                    parts = qc.split(' ')
-                    if len(parts) != 2: continue
-                    pc = parts[1][0]
-                    try: k = float(parts[1][1:])
-                    except: continue
-                    vol = si(item.get('volume',0))
-                    if k not in strikes_map:
-                      strikes_map[k] = {'k':k,'coi':0,'cvol':0,'poi':0,'pvol':0}
-                    if pc == 'C':
-                      strikes_map[k]['cvol'] = vol
-                      call_oi += vol
-                    elif pc == 'P':
-                      strikes_map[k]['pvol'] = vol
-                      put_oi += vol
-                  result['call_oi'] = call_oi
-                  result['put_oi']  = put_oi
-                  result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
-                  result['data_type'] = 'volume_proxy'
-
-          except urllib.error.HTTPError as e:
-            print(f"POST HTTP {e.code}: {e.reason}")
-            result['errors'].append(f'post:{e.code}')
-          except Exception as e:
-            print(f"POST error: {e}")
-            result['errors'].append(f'post:{e}')
-
-          # ═══ 3. ATM endpoint avec auth ═══
-          if result['call_oi'] == 0:
-            print("\n=== 3. ATM avec auth ===")
-            for month in [6, 5, 7]:
+          for dt in dates:
+            date_str = dt.strftime('%Y%m%d')
+            # CME FTP public URL pour options GC
+            # Format: https://www.cmegroup.com/ftp/pub/settle/
+            urls_to_try = [
+              # Options settlements
+              f'https://www.cmegroup.com/ftp/pub/settle/stloc{dt.strftime("%m%d%y")}.csv',
+              f'https://www.cmegroup.com/ftp/pub/settle/stloc{dt.strftime("%m%d%y")}.gz',
+              # Alternate format
+              f'https://www.cmegroup.com/CmeWS/mvc/Settlements/options/settlements/{date_str}/download?productId=444&fileType=csv',
+              f'https://www.cmegroup.com/CmeWS/mvc/Settlements/options/settlements/{date_str}/download?productId=192&fileType=csv',
+            ]
+            
+            for url in urls_to_try:
               try:
-                url = f'https://www.cmegroup.com/CmeWS/mvc/atm/strike-prices/192/2026/{month}/ATM?isProtected&_t={TS}'
-                d = get(url)
-                print(f"ATM {month}: type={type(d).__name__}, {json.dumps(d)[:400]}")
-                break
+                print(f"Trying: {url[-70:]}")
+                if url.endswith('.gz'):
+                  data = get(url, binary=True, timeout=20)
+                  txt = gzip.decompress(data).decode('utf-8', errors='replace')
+                else:
+                  txt = get(url, timeout=20)
+                
+                if len(txt) < 100:
+                  print(f"  Too short: {len(txt)}")
+                  continue
+                  
+                print(f"  Got {len(txt)} chars")
+                print(f"  Sample: {txt[:300]}")
+                
+                # Parse CSV
+                lines = txt.strip().split('\n')
+                if not lines: continue
+                
+                # Detect format
+                header = lines[0].lower()
+                print(f"  Header: {header[:100]}")
+                
+                reader = csv.DictReader(io.StringIO(txt))
+                fields = reader.fieldnames or []
+                print(f"  Fields: {fields[:10]}")
+                
+                call_oi = put_oi = 0
+                strikes_map = {}
+                rows_processed = 0
+                
+                for row in reader:
+                  # Try various field name patterns
+                  sym = (row.get('PRODUCT SYMBOL') or row.get('product_symbol') or 
+                         row.get('Symbol') or row.get('symbol') or '').strip().upper()
+                  
+                  # Filter GC options only
+                  if not any(x in sym for x in ['OG','GC','GC-','OG-']):
+                    continue
+                    
+                  pc_raw = (row.get('PUT/CALL') or row.get('put_call') or 
+                            row.get('Type') or row.get('type') or '').strip().upper()
+                  
+                  strike_raw = (row.get('STRIKE') or row.get('strike') or 
+                                row.get('Strike Price') or row.get('strike_price') or '0')
+                  strike = sf(strike_raw.replace(',',''))
+                  
+                  oi_raw = (row.get('PRIOR DAY OI') or row.get('prior_day_oi') or 
+                            row.get('OPEN INT') or row.get('open_int') or
+                            row.get('Open Interest') or row.get('open_interest') or '0')
+                  oi = si(oi_raw)
+                  
+                  vol_raw = (row.get('EST. VOL') or row.get('est_vol') or 
+                             row.get('Volume') or row.get('volume') or '0')
+                  vol = si(vol_raw)
+                  
+                  settle = sf((row.get('SETTLE') or row.get('settle') or '0').replace(',',''))
+                  
+                  # Month filter
+                  mth = (row.get('CONTRACT MONTH') or row.get('contract_month') or 
+                         row.get('Month') or '').strip().upper()
+                  if mth and not any(x in mth for x in ['JUN','M6','06/26','2026']):
+                    continue
+                    
+                  if not strike or strike < 100: continue
+                  rows_processed += 1
+                  
+                  if strike not in strikes_map:
+                    strikes_map[strike] = {'k':strike,'coi':0,'cvol':0,'poi':0,'pvol':0,'csett':0,'psett':0}
+                    
+                  if pc_raw in ['C','CALL']:
+                    strikes_map[strike]['coi'] = oi
+                    strikes_map[strike]['cvol'] = vol
+                    strikes_map[strike]['csett'] = settle
+                    call_oi += oi
+                  elif pc_raw in ['P','PUT']:
+                    strikes_map[strike]['poi'] = oi
+                    strikes_map[strike]['pvol'] = vol
+                    strikes_map[strike]['psett'] = settle
+                    put_oi += oi
+                
+                print(f"  Processed {rows_processed} rows: call={call_oi} put={put_oi} strikes={len(strikes_map)}")
+                
+                if call_oi + put_oi > 0:
+                  result['call_oi'] = call_oi
+                  result['put_oi'] = put_oi
+                  result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
+                  result['data_source'] = f'cme_settlements_{date_str}'
+                  print(f"SUCCESS: {url[-50:]}")
+                  break
+                  
               except urllib.error.HTTPError as e:
-                print(f"ATM {month}: HTTP {e.code}")
+                print(f"  HTTP {e.code}")
               except Exception as e:
-                print(f"ATM {month}: {e}")
+                print(f"  Error: {e}")
+                
+            if result['call_oi'] > 0:
+              break
+
+          # ═══ 3. FALLBACK: CME COMEX public report ═══
+          if result['call_oi'] == 0:
+            print("\n=== 3. COMEX OPEN INTEREST REPORT ===")
+            # CFTC publie aussi les données OI — source officielle US
+            try:
+              # CFTC Commitments of Traders — gold options
+              url = 'https://www.cftc.gov/dea/futures/deacmesf.htm'
+              txt = get(url, timeout=15)
+              print(f"CFTC: {len(txt)} chars")
+              # Parse pour trouver Gold
+              if 'GOLD' in txt.upper():
+                lines = txt.split('\n')
+                for i, line in enumerate(lines):
+                  if 'GOLD' in line.upper() and 'COMEX' in line.upper():
+                    print(f"Found: {line[:200]}")
+                    # Extract OI numbers
+                    import re
+                    numbers = re.findall(r'\d{4,}', line)
+                    print(f"Numbers: {numbers[:10]}")
+                    break
+            except Exception as e:
+              print(f"CFTC: {e}")
+
+          # ═══ 4. Résumé des sources disponibles ═══
+          print("\n=== 4. SOURCES DISPONIBLES ===")
+          # Test quels endpoints CME fonctionnent vraiment
+          test_urls = [
+            f'https://www.cmegroup.com/CmeWS/mvc/Settlements/futures/settlements/{today.strftime("%Y%m%d")}/download?productId=437&fileType=csv',
+            f'https://www.cmegroup.com/CmeWS/mvc/Settlements/options/settlements/{today.strftime("%Y%m%d")}/download?productId=444&fileType=csv',
+            'https://www.cmegroup.com/ftp/pub/settle/',
+          ]
+          for url in test_urls:
+            try:
+              txt = get(url, timeout=8)
+              print(f"OK ({len(txt)}ch): {url[-60:]}")
+              print(f"  Sample: {txt[:200]}")
+            except urllib.error.HTTPError as e:
+              print(f"HTTP {e.code}: {url[-60:]}")
+            except Exception as e:
+              print(f"ERR: {url[-60:]} → {e}")
 
           # ═══ SAVE ═══
           os.makedirs('data', exist_ok=True)
@@ -224,6 +264,7 @@ jobs:
           print(f"Call OI: {result['call_oi']}")
           print(f"Put OI: {result['put_oi']}")
           print(f"Strikes: {len(result['strikes'])}")
+          print(f"Source: {result['data_source']}")
           print(f"Errors: {result['errors']}")
           PYEOF
 
