@@ -18,34 +18,21 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import urllib.request, urllib.error
-          import json, time, os
+          import json, time, os, re
 
           TS = int(time.time() * 1000)
 
-          HEADERS_GET = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.cmegroup.com/markets/metals/precious/gold.quotes.options.html',
-            'Origin': 'https://www.cmegroup.com',
-            'Cache-Control': 'no-cache',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-origin',
-          }
-
-          HEADERS_POST = {**HEADERS_GET, 'Content-Type': 'application/json'}
-
-          def get(url, timeout=15):
-            req = urllib.request.Request(url, headers=HEADERS_GET)
+          def get(url, headers=None, timeout=15):
+            h = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'application/json, text/plain, */*',
+              'Accept-Language': 'en-US,en;q=0.9',
+            }
+            if headers:
+              h.update(headers)
+            req = urllib.request.Request(url, headers=h)
             with urllib.request.urlopen(req, timeout=timeout) as r:
-              return json.loads(r.read().decode('utf-8', errors='replace'))
-
-          def post(url, body, timeout=15):
-            data = json.dumps(body).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers=HEADERS_POST, method='POST')
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-              return json.loads(r.read().decode('utf-8', errors='replace'))
+              return r.read().decode('utf-8', errors='replace')
 
           def si(v):
             try: return int(str(v).replace(',','').strip())
@@ -63,174 +50,155 @@ jobs:
             'strikes': [], 'errors': []
           }
 
-          # ═══ 1. GC price via v2 ═══
+          # ═══ 1. GC PRICE via CME v2 ═══
           print("=== 1. GC PRICE ===")
           try:
-            d = get(f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/437/GCM6?isProtected&_t={TS}')
-            # Cherche dans quotes array
+            txt = get(
+              f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/437/GCM6?isProtected&_t={TS}',
+              headers={'Referer': 'https://www.cmegroup.com/'}
+            )
+            d = json.loads(txt)
             quotes = d.get('quotes', [])
             for q in quotes:
-              p = sf(q.get('last', q.get('notionalValue', 0)))
-              if 1000 < p < 10000:  # gold price range
-                result['price'] = p
-                print(f"Price: {p}")
+              # notionalValue = price * 100 (100oz contract)
+              nv = sf(q.get('notionalValue', 0))
+              if nv > 100000:
+                result['price'] = round(nv / 100, 1)
+                result['gc_oi'] = si(q.get('openInterest', 0))
+                print(f"Price: {result['price']}, OI: {result['gc_oi']}")
                 break
-            # Ou directement dans notionalValue / 100
-            if not result['price']:
-              for q in quotes:
-                nv = sf(q.get('notionalValue', 0))
-                if nv > 100000:  # 100oz * ~5000
-                  result['price'] = round(nv / 100, 1)
-                  print(f"Price from notionalValue: {result['price']}")
-                  break
-            print(f"GC v2 quotes[0] keys: {list(quotes[0].keys()) if quotes else 'empty'}")
-            if quotes:
-              print(f"GC v2 quotes[0] sample: {json.dumps(quotes[0])[:400]}")
+              # Or direct last price
+              lp = sf(q.get('last', 0))
+              if 1000 < lp < 10000:
+                result['price'] = lp
+                result['gc_oi'] = si(q.get('openInterest', 0))
+                print(f"Price (last): {result['price']}")
+                break
           except Exception as e:
-            print(f"GC v2 error: {e}")
-            result['errors'].append(f'gc:{e}')
+            print(f"CME v2 error: {e}")
+            result['errors'].append(f'cme:{e}')
 
-          # ═══ 2. Stooq fallback ═══
+          # ═══ 2. STOOQ FALLBACK ═══
           if not result['price']:
             try:
-              req = urllib.request.Request(
-                'https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv',
-                headers={'User-Agent':'Mozilla/5.0'}
-              )
-              with urllib.request.urlopen(req, timeout=8) as r:
-                lines = r.read().decode().strip().split('\n')
-                if len(lines) >= 2:
-                  result['price'] = float(lines[1].split(',')[6])
-                  print(f"Stooq price: {result['price']}")
+              txt = get('https://stooq.com/q/l/?s=gc.f&f=sd2t2ohlcv&h&e=csv',
+                       headers={'User-Agent':'Mozilla/5.0'})
+              lines = txt.strip().split('\n')
+              if len(lines) >= 2:
+                result['price'] = float(lines[1].split(',')[6])
+                print(f"Stooq price: {result['price']}")
             except Exception as e:
               result['errors'].append(f'stooq:{e}')
 
           SP = result['price'] or 4700
-          print(f"Spot price: {SP}")
+          print(f"Spot: {SP}")
 
-          # ═══ 3. ATM options GET ═══
-          # URL: CmeWS/mvc/atm/strike-prices/192/2026/5/ATM
-          # Produit 192 = GC options, month=5 (May) ou 6 (June)
-          print("\n=== 3. ATM OPTIONS ===")
-          atm_data = None
-          for month in [6, 5, 7]:
-            try:
-              url = f'https://www.cmegroup.com/CmeWS/mvc/atm/strike-prices/192/2026/{month}/ATM?isProtected&_t={TS}'
-              d = get(url, timeout=12)
-              print(f"ATM month={month}: type={type(d).__name__}")
-              if isinstance(d, dict):
-                print(f"  keys: {list(d.keys())}")
-                print(f"  sample: {json.dumps(d)[:500]}")
-              elif isinstance(d, list):
-                print(f"  len={len(d)}, first: {json.dumps(d[0])[:300] if d else 'empty'}")
-              atm_data = d
-              break
-            except urllib.error.HTTPError as e:
-              print(f"ATM month={month}: HTTP {e.code}")
-            except Exception as e:
-              print(f"ATM month={month}: {e}")
-
-          # ═══ 4. quotes-by-symbol POST (vraie requête CME) ═══
-          print("\n=== 4. quotes-by-symbol POST ===")
-          # Le body POST contient une liste de quote codes
-          # Format: ["OGM6 C4700", "OGM6 P4700", "OGM6 C4750", ...]
-          # On génère les strikes autour du spot
-          strikes_to_fetch = []
-          for s in range(int(SP/25)*25 - 200, int(SP/25)*25 + 225, 25):
-            strikes_to_fetch.append(f"OGM6 C{s}")
-            strikes_to_fetch.append(f"OGM6 P{s}")
-
-          print(f"Fetching {len(strikes_to_fetch)} quote codes")
+          # ═══ 3. BARCHART OPTIONS OI ═══
+          # Barchart a une API publique pour les options futures GC
+          print("\n=== 3. BARCHART OPTIONS OI ===")
+          
+          # Method A: Barchart free API endpoint
           try:
-            url = f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/quotes-by-symbol?isProtected&_t={TS}'
-            # Body format from network inspector
-            body = strikes_to_fetch
-            d = post(url, body, timeout=20)
-            print(f"qbs response type: {type(d).__name__}, len: {len(d) if isinstance(d, list) else 'N/A'}")
-            if isinstance(d, list) and d:
-              print(f"First item: {json.dumps(d[0])[:300]}")
-              print(f"First item keys: {list(d[0].keys()) if isinstance(d[0], dict) else 'N/A'}")
+            # GCM26 = Gold Jun 2026
+            url = 'https://www.barchart.com/proxies/core-api/v1/options/chain?symbol=GCM26&fields=strikePrice%2CopenInterest%2Cvolume%2ClastPrice%2CbaseSymbol&groupBy=strike&raw=1'
+            txt = get(url, headers={
+              'Referer': 'https://www.barchart.com/futures/quotes/GCM26/options',
+              'Accept': 'application/json',
+            })
+            d = json.loads(txt)
+            rows = d.get('data', [])
+            print(f"Barchart rows: {len(rows)}")
+            if rows:
+              print(f"First row keys: {list(rows[0].keys()) if isinstance(rows[0], dict) else type(rows[0])}")
+              print(f"First row: {json.dumps(rows[0])[:300]}")
+            
+            call_oi = put_oi = 0
+            strikes_map = {}
+            for row in rows:
+              k = sf(row.get('strikePrice', row.get('strike', 0)))
+              if not k: continue
+              # Barchart separates call/put
+              sym = str(row.get('baseSymbol', row.get('symbol', '')))
+              oi = si(row.get('openInterest', 0))
+              vol = si(row.get('volume', 0))
+              # Detect call vs put from symbol or field
+              is_call = 'C' in sym.upper() or row.get('type','') == 'call'
+              is_put  = 'P' in sym.upper() or row.get('type','') == 'put'
               
-              # Parse responses - quoteCode = "OGM6 C4720"
-              call_oi = put_oi = 0
-              strikes_map = {}
-              for item in d:
-                qc = item.get('quoteCode', item.get('escapedQuoteCode', ''))
-                # Parse "OGM6 C4720" → type=C, strike=4720
-                parts = qc.split(' ')
-                if len(parts) == 2:
-                  pc = parts[1][0]  # C or P
-                  try:
-                    k = float(parts[1][1:])
-                  except:
-                    continue
-                  
-                  # OI fields to check
-                  oi = si(item.get('openInterest', item.get('oi', item.get('totalOpenInterest', 0))))
-                  vol = si(item.get('volume', 0))
-                  last = sf(item.get('last', 0))
-                  
-                  if k not in strikes_map:
-                    strikes_map[k] = {'k': k, 'coi': 0, 'cvol': 0, 'poi': 0, 'pvol': 0, 'cbid': 0, 'cask': 0, 'pbid': 0, 'pask': 0}
-                  
-                  if pc == 'C':
-                    strikes_map[k]['coi'] = oi
-                    strikes_map[k]['cvol'] = vol
-                    strikes_map[k]['clast'] = last
-                    call_oi += oi
-                  elif pc == 'P':
-                    strikes_map[k]['poi'] = oi
-                    strikes_map[k]['pvol'] = vol
-                    strikes_map[k]['plast'] = last
-                    put_oi += oi
+              if k not in strikes_map:
+                strikes_map[k] = {'k':k,'coi':0,'cvol':0,'poi':0,'pvol':0}
+              if is_call:
+                strikes_map[k]['coi'] = oi
+                strikes_map[k]['cvol'] = vol
+                call_oi += oi
+              elif is_put:
+                strikes_map[k]['poi'] = oi
+                strikes_map[k]['pvol'] = vol
+                put_oi += oi
+            
+            if call_oi + put_oi > 0:
+              result['call_oi'] = call_oi
+              result['put_oi'] = put_oi
+              result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
+              print(f"Barchart: call={call_oi} put={put_oi} strikes={len(strikes_map)}")
+          except Exception as e:
+            print(f"Barchart A error: {e}")
+            result['errors'].append(f'barchart_a:{e}')
+
+          # Method B: Barchart alternative endpoint
+          if result['call_oi'] == 0:
+            try:
+              url = f'https://www.barchart.com/proxies/core-api/v1/quotes/get?symbols=GCM26C{int(SP//25*25)},GCM26P{int(SP//25*25)}&fields=openInterest,volume,lastPrice&raw=1'
+              txt = get(url, headers={'Referer':'https://www.barchart.com/'})
+              print(f"Barchart B: {txt[:400]}")
+            except Exception as e:
+              print(f"Barchart B error: {e}")
+
+          # Method C: Yahoo Finance options (GC=F)
+          if result['call_oi'] == 0:
+            print("\n=== 4. YAHOO FINANCE OPTIONS ===")
+            try:
+              url = 'https://query2.finance.yahoo.com/v7/finance/options/GC%3DF'
+              txt = get(url, headers={'Accept':'application/json'})
+              d = json.loads(txt)
+              chain = d.get('optionChain',{}).get('result',[{}])[0]
+              opts = chain.get('options',[{}])[0]
+              calls = opts.get('calls', [])
+              puts  = opts.get('puts', [])
               
-              print(f"Parsed: call_oi={call_oi} put_oi={put_oi} strikes={len(strikes_map)}")
+              print(f"Yahoo: {len(calls)} calls, {len(puts)} puts")
+              if calls:
+                print(f"Call[0] keys: {list(calls[0].keys())}")
+                print(f"Call[0]: {json.dumps(calls[0])[:200]}")
+              
+              spot = chain.get('quote',{}).get('regularMarketPrice', SP)
+              if spot: result['price'] = result['price'] or spot
+              
+              call_oi = sum(si(c.get('openInterest',0)) for c in calls)
+              put_oi  = sum(si(p.get('openInterest',0)) for p in puts)
+              print(f"Yahoo OI: calls={call_oi} puts={put_oi}")
               
               if call_oi + put_oi > 0:
+                strikes_map = {}
+                for c in calls:
+                  k = sf(c.get('strike',0))
+                  if not k: continue
+                  if k not in strikes_map: strikes_map[k]={'k':k,'coi':0,'cvol':0,'poi':0,'pvol':0}
+                  strikes_map[k]['coi'] = si(c.get('openInterest',0))
+                  strikes_map[k]['cvol'] = si(c.get('volume',0))
+                for p in puts:
+                  k = sf(p.get('strike',0))
+                  if not k: continue
+                  if k not in strikes_map: strikes_map[k]={'k':k,'coi':0,'cvol':0,'poi':0,'pvol':0}
+                  strikes_map[k]['poi'] = si(p.get('openInterest',0))
+                  strikes_map[k]['pvol'] = si(p.get('volume',0))
                 result['call_oi'] = call_oi
-                result['put_oi'] = put_oi
+                result['put_oi']  = put_oi
                 result['strikes'] = sorted(strikes_map.values(), key=lambda x: x['k'])
-              else:
-                # OI might be 0 but we have volume — use volume as proxy and check all fields
-                print("Zero OI — checking all fields in first item:")
-                if d:
-                  print(json.dumps(d[0], indent=2)[:600])
-                  
-          except urllib.error.HTTPError as e:
-            print(f"qbs POST error: HTTP {e.code}")
-            # Try with different body format
-            try:
-              # Maybe body needs to be wrapped
-              body2 = {"quoteCodes": strikes_to_fetch}
-              d2 = post(url, body2, timeout=20)
-              print(f"qbs POST (wrapped): {json.dumps(d2)[:300]}")
-            except Exception as e2:
-              print(f"qbs POST wrapped error: {e2}")
-            result['errors'].append(f'qbs:{e.code}')
-          except Exception as e:
-            print(f"qbs POST error: {e}")
-            result['errors'].append(f'qbs:{e}')
-
-          # ═══ 5. contracts-by-number (aussi un POST) ═══
-          print("\n=== 5. contracts-by-number ===")
-          try:
-            url = f'https://www.cmegroup.com/CmeWS/mvc/quotes/v2/contracts-by-number?isProtected&_t={TS}'
-            # Try GET first
-            d = get(url, timeout=10)
-            print(f"cbn GET: {json.dumps(d)[:400]}")
-          except urllib.error.HTTPError as e:
-            if e.code == 400:
-              # It's a POST
-              try:
-                body = {"productId": 192, "type": "OPT", "month": 6, "year": 2026}
-                d = post(url, body, timeout=10)
-                print(f"cbn POST: {json.dumps(d)[:400]}")
-              except Exception as e2:
-                print(f"cbn POST error: {e2}")
-            else:
-              print(f"cbn GET: HTTP {e.code}")
-          except Exception as e:
-            print(f"cbn error: {e}")
+                print(f"Yahoo: call={call_oi} put={put_oi}")
+            except Exception as e:
+              print(f"Yahoo error: {e}")
+              result['errors'].append(f'yahoo:{e}')
 
           # ═══ SAVE ═══
           os.makedirs('data', exist_ok=True)
