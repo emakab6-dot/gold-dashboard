@@ -1,13 +1,11 @@
 {
-  "timestamp": 1778803695384,
-  "updated": "2026-05-15T00:08:15Z",
-  "price": null,
+  "timestamp": 1778818643478,
+  "updated": "2026-05-15T04:17:23Z",
+  "price": 4621.75,
   "gc_oi": null,
   "call_oi": 0,
   "put_oi": 0,
   "strikes": [],
-  "errors": [
-    "price:HTTP Error 404: Not Found"
-  ],
+  "errors": [],
   "data_source": null
 }
