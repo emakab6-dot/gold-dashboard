@@ -1,11 +1,13 @@
 {
-  "timestamp": 1779546043295,
-  "updated": "2026-05-23T14:20:43Z",
-  "price": 4523.2,
+  "timestamp": 1779558274872,
+  "updated": "2026-05-23T17:44:34Z",
+  "price": null,
   "gc_oi": null,
   "call_oi": 0,
   "put_oi": 0,
   "strikes": [],
-  "errors": [],
+  "errors": [
+    "price:<urlopen error timed out>"
+  ],
   "data_source": null
 }
