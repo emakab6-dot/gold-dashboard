@@ -1,11 +1,13 @@
 {
-  "timestamp": 1780704944990,
-  "updated": "2026-06-06T00:15:44Z",
-  "price": 4365.3,
+  "timestamp": 1780720282706,
+  "updated": "2026-06-06T04:31:22Z",
+  "price": null,
   "gc_oi": null,
   "call_oi": 0,
   "put_oi": 0,
   "strikes": [],
-  "errors": [],
+  "errors": [
+    "price:could not convert string to float: '\"0\")).join(\"\");if(x.startsWith(t))break;n++}const r=await fetch(\"/__verify\"'"
+  ],
   "data_source": null
 }
